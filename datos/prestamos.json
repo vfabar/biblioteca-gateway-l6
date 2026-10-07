@@ -66,6 +66,43 @@
       "desde": "2026-09-21",
       "hasta": "2026-10-05",
       "devuelto": false
+    },
+    {
+      "libroId": 2,
+      "usuarioSub": "14089458-10b1-7068-7bc4-9221320e601b",
+      "desde": "2026-10-07",
+      "hasta": "2026-10-21",
+      "devuelto": false,
+      "id": 9
+    },
+    {
+      "libroId": 2,
+      "usuarioSub": "14089458-10b1-7068-7bc4-9221320e601b",
+      "id": 10
+    },
+    {
+      "libroId": 3,
+      "usuarioSub": "14089458-10b1-7068-7bc4-9221320e601b",
+      "desde": "2026-10-07",
+      "hasta": "2026-10-21",
+      "devuelto": false,
+      "id": 11
+    },
+    {
+      "libroId": 3,
+      "usuarioSub": "14089458-10b1-7068-7bc4-9221320e601b",
+      "desde": "2026-10-07",
+      "hasta": "2026-10-21",
+      "devuelto": false,
+      "id": 12
+    },
+    {
+      "libroId": 3,
+      "usuarioSub": "14089458-10b1-7068-7bc4-9221320e601b",
+      "desde": "2026-10-07",
+      "hasta": "2026-10-21",
+      "devuelto": false,
+      "id": 13
     }
   ]
 }
