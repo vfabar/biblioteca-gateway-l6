@@ -1,0 +1,8 @@
+# Lo lee servicios/Dockerfile, cuyo contexto es esta carpeta. El gateway tiene el suyo.
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+.git
+gateway
+cert

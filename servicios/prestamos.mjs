@@ -1,13 +1,8 @@
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { connect } from 'amqplib';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { EXCHANGES, ROUTING_KEYS, declararTopologia } from './mensajeria/topologia.mjs';
-
-const ARCHIVO = new URL('../datos/prestamos.json', import.meta.url);
-const leer = () => JSON.parse(readFileSync(ARCHIVO, 'utf8'));
-const guardar = (d) => writeFileSync(ARCHIVO, JSON.stringify(d, null, 2), 'utf8');
+import { ROUTING_KEYS } from './mensajeria/topologia.mjs';
+import { conectarPublicador, publicar } from './mensajeria/publicador.mjs';
+import { prepararEsquema, listar, crear, devolver } from './repositorio-prestamos.mjs';
 
 const LATENCIA_SIMULADA_MS = 300;
 const RABBITMQ_URL = process.env.RABBITMQ_URL;                        // de servicios/.env
@@ -15,6 +10,10 @@ const EMISOR = process.env.COGNITO_ISSUER;                            // de serv
 if (!RABBITMQ_URL || !EMISOR) {
   throw new Error('faltan RABBITMQ_URL o COGNITO_ISSUER: arranca con --env-file=servicios/.env');
 }
+
+await prepararEsquema();
+console.log('[prestamos] esquema prestamos listo');
+
 const jwks = createRemoteJWKSet(new URL(`${EMISOR}/.well-known/jwks.json`));
 
 const json = (res, codigo, cuerpo) => {
@@ -39,49 +38,40 @@ const subDelToken = async (cabecera) => {
   }
 };
 
-// 2 · Una conexion al broker para todo el proceso, abierta al arrancar.
-const conexion = await connect(RABBITMQ_URL);
-const canal = await conexion.createChannel();
-await declararTopologia(canal);
-console.log(`[prestamos] publicando en ${RABBITMQ_URL}`);
-
-const publicar = (routingKey, payload) => {
-  const eventoId = randomUUID();
-  const aceptado = canal.publish(
-    EXCHANGES.eventos.nombre,
-    routingKey,
-    Buffer.from(JSON.stringify(payload)),
-    {
-      persistent: true,
-      contentType: 'application/json',
-      headers: { 'x-evento-id': eventoId, 'x-emitido-en': new Date().toISOString() },
-    },
-  );
-  console.log(`[prestamos] publicado ${routingKey} evento ${eventoId} aceptado=${aceptado}`);
-};
+// 2 · Conexión al publicador centralizado
+await conectarPublicador(RABBITMQ_URL);
+console.log(`[prestamos] publicando en ${new URL(RABBITMQ_URL).host}`);
 
 createServer(async (peticion, respuesta) => {
   await new Promise((listo) => setTimeout(listo, LATENCIA_SIMULADA_MS));
-  const datos = leer();
   const { method: metodo, url } = peticion;
   console.log(`[prestamos] ${metodo} ${url}`);
 
-  if (metodo === 'GET') return json(respuesta, 200, datos.prestamos);
+  if (metodo === 'GET') {
+    try {
+      return json(respuesta, 200, await listar());
+    } catch (error) {
+      console.error(`[prestamos] no se pudo listar: ${error.message || error.code}`);
+      return json(respuesta, 503, { mensaje: 'la base de datos no responde' });
+    }
+  }
 
   if (metodo === 'POST') {
     const sub = await subDelToken(peticion.headers['authorization']);
     if (!sub) return json(respuesta, 401, { mensaje: 'falta un token valido' });
 
     const cuerpo = await leerCuerpo(peticion);
-    const nuevo = {
-      ...cuerpo,
-      usuarioSub: sub,                                                 // el del TOKEN, pise lo que pise
-      id: Math.max(0, ...datos.prestamos.map((p) => p.id)) + 1,
-    };
-    datos.prestamos.push(nuevo);
-    guardar(datos);                                                    // primero se escribe
+    let nuevo;
+    try {
+      nuevo = await crear({ libroId: cuerpo.libroId, usuarioSub: sub, desde: cuerpo.desde, hasta: cuerpo.hasta });
+    } catch (error) {
+      if (error.code === '23505') return json(respuesta, 409, { mensaje: 'ya tienes un prestamo vigente de ese libro' });
+      if (/^2[23]/.test(error.code ?? '')) return json(respuesta, 400, { mensaje: error.message });
+      console.error(`[prestamos] no se pudo guardar: ${error.message || error.code}`);
+      return json(respuesta, 503, { mensaje: 'la base de datos no responde' });
+    }
 
-    publicar(ROUTING_KEYS.prestamoCreado, {                            // y recien despues se anuncia
+    publicar(ROUTING_KEYS.prestamoCreado, {                            // igual que en L6: despues de escribir
       prestamoId: nuevo.id,
       libroId: nuevo.libroId,
       usuarioSub: sub,
@@ -96,12 +86,20 @@ createServer(async (peticion, respuesta) => {
     if (!sub) return json(respuesta, 401, { mensaje: 'falta un token valido' });
 
     const id = Number(url.split('/').pop());
-    const prestamo = datos.prestamos.find((p) => p.id === id);
+    let prestamo;
+    try {
+      prestamo = Number.isInteger(id) ? await devolver(id) : null;
+    } catch (error) {
+      console.error(`[prestamos] no se pudo devolver: ${error.message || error.code}`);
+      return json(respuesta, 503, { mensaje: 'la base de datos no responde' });
+    }
     if (!prestamo) return json(respuesta, 404, { mensaje: `no existe el prestamo ${id}` });
-    prestamo.devuelto = true;
-    guardar(datos);
 
-    // Lo haces tu: falta el evento gemelo.
+    publicar(ROUTING_KEYS.prestamoDevuelto, {                          // igual que en L6: despues de escribir
+      prestamoId: prestamo.id,
+      libroId: prestamo.libroId,
+      usuarioSub: sub,
+    });
 
     return json(respuesta, 200, prestamo);
   }
